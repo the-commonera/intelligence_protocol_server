@@ -1,25 +1,47 @@
 import Fastify from 'fastify';
+import { SupabaseUploadObject ,SupabaseFetchTaskStatus} from "./database/supadb.js";
+import backgroundRunner from './background/backgroundrunner.js';
+//import {uploadsecret} from "./secretsmanagement.js";
 
-import swagger from '@fastify/swagger';
-import swaggerUi from '@fastify/swagger-ui';
-import {rpcMethods} from './rpcmethods.js';
 
+import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
 
 
 const fastify = Fastify({ logger: true });
 
 
+await fastify.register(fastifySwagger, {
+  openapi: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Fastify API Documentation',
+      description: 'Automated swagger documentation for Fastify',
+      version: '1.0.0'
+    },
+    servers: [{ url: 'http://localhost:3000' }]
+  }
+});
+
+// 2. Register the UI plugin to serve the documentation
+await fastify.register(fastifySwaggerUi, {
+  routePrefix: '/documentation', // Access via http://localhost:3000/documentation
+  uiConfig: {
+    docExpansion: 'full',
+    deepLinking: false
+  }
+});
 
 
 const registerTemplateSchema = {
   
   body: {
     type: "object",
-    required: ["name", "version", "description","capabilities","context","webhook_url"],
+    required: ["name", "version","tenantid", "description","capabilities","context","modeldata","webhook_url"],
     properties: {
       name:{type:"string"},
+      version: { type: "string"},
       tenantid:{type:"string"},
-      version: { type: "string", pattern: "^\\d+\\.\\d+\\.\\d+$" },
       description:{type:"string",minLength:1},
       capabilities: {
         
@@ -36,7 +58,7 @@ const registerTemplateSchema = {
           additionalProperties: false
         },
       },
-      context:{
+       modeldata:{
         type:"object"
       },
       webhook_url: { type: "string", format: "uri" }
@@ -48,25 +70,27 @@ const registerTemplateSchema = {
 
 
 
-const templatesRegisterRpcSchema = {
-
-  type: "object",
-  properties: {
-    jsonrpc: { type: "string", enum: ["2.0"] },
-    method: { type: "string", enum: ["templates.register"] },
-    params: registerTemplateSchema.body,
-    id: { type: ["string", "number"] }
-  },
-  required: ["jsonrpc", "method", "params", "id"]
-};
+const TenantSchema={
+  body:{
+    type:'object',
+    required:['id','name','organisation','created_at'],
+    properties:{
+    id:{type:'string'},
+    name:{type:'string'},
+    organisation:{type:'string'},
+    created_at:{type:'string'}
+  }
+}
+}
 
 
 
 const RunSchema = {
   body:{
   type: 'object',
-  required: ['name'], // Automatically returns 400 if 'name' is missing
+  required: ['name','tenantid','goal'],
   properties: {
+    
     name: { type: 'string' },
     tenantid:{type:'string'},
     goal:{type:'string'},
@@ -81,92 +105,167 @@ const RunSchema = {
 
 
 
-const workflowRunRpcSchema = {
-  type: "object",
+const TaskSchema = {
+  body:{
+  type: 'object',
+  required: ['taskid'],
   properties: {
-    jsonrpc: { type: "string", enum: ["2.0"] },
-    method: { type: "string", enum: ["workflow.run"] },
-    params: RunSchema.body,
-    id: { type: ["string", "number"] }
+    taskid: { type: 'string' },
   },
-  required: ["jsonrpc", "method", "params", "id"]
+  additionalProperties: true  
+  }
 };
 
 
 
-await fastify.register(swagger, {
-  openapi: {
-    info: {
-      title: 'API Docs',
-      version: '1.0.0'
-    },
-       components: {
-      schemas: {
-        TemplatesRegisterRpcRequest: templatesRegisterRpcSchema,
-        WorkflowRunRpcRequest: workflowRunRpcSchema
-      }
+
+
+
+fastify.post("/register/tenants",{schema:TenantSchema},async (request,reply)=>{
+
+  const {id,name,organisation,created_at}=request.body;
+ 
+  try{
+  let status=await SupabaseUploadObject({
+    table:"tenants",
+    asset:{
+      id:id,
+      name:name,
+      organisation:organisation,
+      created_at:created_at
+    }});
+
+   if(status==true){
+   
+    return {
+      status:"success",
+      message:"Tenant registered successfully"
     }
-  }
-});
 
-
-
-
-
-
-fastify.get('/openapi.json', async (request, reply) => {
-  return fastify.swagger();
-});
-
-
-fastify.post("/rpc", async (request, reply) => {
-  const { jsonrpc, method, params, id } = request.body;
-
-  if (jsonrpc !== "2.0" || typeof method !== "string") {
+   }
+   else if (status==false){
     return {
-      jsonrpc: "2.0",
-      error: {
-        code: -32600,
-        message: "Invalid Request"
-      },
-      id: id ?? null
-    };
-  }
+      status: "failed",
+      message: "Failed to register tenant",
+    }
+   }
 
-  const handler = rpcMethods[method];
 
-  if (!handler) {
+
+    
+}
+  catch(e){
+
+
+    reply.code(500);
     return {
-      jsonrpc: "2.0",
-      error: {
-        code: -32601,
-        message: "Method not found"
-      },
-      id: id ?? null
-    };
+      status: "error",
+      message: String(e),
   }
+  
+}
 
-  try {
-    const result = await handler(params ?? {});
+})
 
-    return {
-      jsonrpc: "2.0",
-      result,
-      id
-    };
-  } catch (error) {
-    fastify.log.error(error);
 
-    return {
-      jsonrpc: "2.0",
-      error: {
-        code: -32603,
-        message: "Internal error"
-      },
-      id: id ?? null
-    };
+
+
+fastify.post("/templates/register",{ schema: registerTemplateSchema },
+  
+  async (request, reply) => {
+  console.log(request.body)
+
+    
+    const { name,tenantid,version,description,capabilities,modeldata,webhook_url} = request.body;
+
+
+    try {
+      const specKey = `${name}@${version}`;
+ 
+      let status=await SupabaseUploadObject({
+        table:"templates",
+        asset:{
+        id:specKey,
+        tenantid:tenantid,
+        version:version,
+        description:description,
+        capabilities:capabilities,
+        modeldata:modeldata,
+
+        webhook_url: webhook_url ?? null,
+        registered_at: new Date(),
+      }
+      });
+      
+      if (status ==true){
+
+          return {
+            status: "registered",
+            spec: specKey,
+        };
+        
+      }
+      else {
+
+          return {
+            status: "failed",
+            spec: specKey,
+      };
+      
+      
+      }
+    
+    } catch (e) {
+      reply.code(500);
+      return {
+        status: "error",
+        message: String(e),
+      };
+    }
+    
+    
   }
-});
+);
+
+
+
+
+
+
+
+fastify.post("/run/workflow",{schema:RunSchema},async (request,reply)=>{
+
+
+    const {name,tenantid,goal,context}=request.body;
+    let inputs={
+      name:name,
+      tenantid:tenantid,
+      goal:goal,
+      context:context
+    }
+    backgroundRunner(inputs).catch((err) => {
+
+          fastify.log.error(err, 'Background task failed');
+
+    });
+
+    return {taskid:name,status:"running"}
+  
+})
+
+
+
+
+
+fastify.post("/task/status",{schema:TaskSchema},async (request,reply)=>{
+
+
+    const {taskid}=request.body;
+    let taskstatus=SupabaseFetchTaskStatus({documentId:taskid})
+    return taskstatus
+  
+})
+
 
 
 const start = async () => {
@@ -182,3 +281,4 @@ const start = async () => {
 };
 
 start();
+
