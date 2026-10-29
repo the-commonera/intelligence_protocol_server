@@ -1,17 +1,17 @@
 import Fastify from 'fastify';
 import { SupabaseUploadObject ,SupabaseFetchTaskStatus} from "./database/supadb.js";
 import backgroundRunner from './background/backgroundrunner.js';
-//import {uploadsecret} from "./secretsmanagement.js";
-
-
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
+import { encrypt } from './credentials/encryption.js';
+
 
 
 const fastify = Fastify({ logger: true });
 
 
 await fastify.register(fastifySwagger, {
+
   openapi: {
     openapi: '3.0.0',
     info: {
@@ -21,7 +21,8 @@ await fastify.register(fastifySwagger, {
     },
     servers: [{ url: 'http://localhost:3000' }]
   }
-});
+}
+);
 
 // 2. Register the UI plugin to serve the documentation
 await fastify.register(fastifySwaggerUi, {
@@ -33,11 +34,11 @@ await fastify.register(fastifySwaggerUi, {
 });
 
 
-const registerTemplateSchema = {
+const policyTemplateSchema = {
   
   body: {
     type: "object",
-    required: ["name", "version","tenantid", "description","capabilities","context","modeldata","webhook_url"],
+    required: ["name", "version","tenantid", "description","capabilities","modeldata","mcp_cred","model_cred","webhook_url"],
     properties: {
       name:{type:"string"},
       version: { type: "string"},
@@ -49,17 +50,32 @@ const registerTemplateSchema = {
         minItems: 1,
         items: { 
           type: "object", 
-          required: ["name", "mcp_url", "apikey"],
+          required: ["name", "mcp_url"],
           properties: {
             name: { type: "string", minLength: 1 },
             mcp_url: { type: "string"},
-            apikey: { type: "string", minLength: 1 }
           },
           additionalProperties: false
         },
       },
        modeldata:{
         type:"object"
+      },
+      model_cred:{type:"string"},
+
+      mcp_cred:{
+
+        type: "array",
+          minItems: 1,
+          items: { 
+            type: "object", 
+            required: ["mcp_url","apikey"],
+            properties: {
+              mcp_url: { type: "string", minLength: 1 },
+              apikey: { type: "string"},
+            },
+          additionalProperties: false
+        },
       },
       webhook_url: { type: "string", format: "uri" }
     },
@@ -121,7 +137,7 @@ const TaskSchema = {
 
 
 
-fastify.post("/register/tenants",{schema:TenantSchema},async (request,reply)=>{
+fastify.post("/register/tenant",{schema:TenantSchema},async (request,reply)=>{
 
   const {id,name,organisation,created_at}=request.body;
  
@@ -170,18 +186,25 @@ fastify.post("/register/tenants",{schema:TenantSchema},async (request,reply)=>{
 
 
 
-fastify.post("/templates/register",{ schema: registerTemplateSchema },
+fastify.post("/policy/register",{ schema: policyTemplateSchema },
   
   async (request, reply) => {
-  console.log(request.body)
+
+
+  //console.log(request.body)
 
     
-    const { name,tenantid,version,description,capabilities,modeldata,webhook_url} = request.body;
-
+    const { name,tenantid,version,description,capabilities,modeldata,model_cred,mcp_cred,webhook_url} = request.body;
 
     try {
       const specKey = `${name}@${version}`;
  
+      const encrypted_mcp_cred=encrypt(JSON.stringify(mcp_cred))
+      const  encrypted_model_cred=encrypt(model_cred)
+      
+      console.log(mcp_cred)
+      console.log(encrypted_mcp_cred)
+      
       let status=await SupabaseUploadObject({
         table:"templates",
         asset:{
@@ -191,7 +214,8 @@ fastify.post("/templates/register",{ schema: registerTemplateSchema },
         description:description,
         capabilities:capabilities,
         modeldata:modeldata,
-
+        model_cred:encrypted_model_cred,
+        mcp_cred:encrypted_mcp_cred,
         webhook_url: webhook_url ?? null,
         registered_at: new Date(),
       }
@@ -223,8 +247,8 @@ fastify.post("/templates/register",{ schema: registerTemplateSchema },
       };
     }
     
-    
   }
+    
 );
 
 
@@ -233,7 +257,7 @@ fastify.post("/templates/register",{ schema: registerTemplateSchema },
 
 
 
-fastify.post("/run/workflow",{schema:RunSchema},async (request,reply)=>{
+fastify.post("/run",{schema:RunSchema},async (request,reply)=>{
 
 
     const {name,tenantid,goal,context}=request.body;
@@ -252,7 +276,6 @@ fastify.post("/run/workflow",{schema:RunSchema},async (request,reply)=>{
     return {taskid:name,status:"running"}
   
 })
-
 
 
 
