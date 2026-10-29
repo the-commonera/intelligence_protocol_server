@@ -1,5 +1,5 @@
 import CapabilityDiscovery from "../discovery/capability_discovery.js";
-import CodeGenPrompt from "../codegeneration/code_generation_prompt_new.js";
+import CodeGenPrompt from "../generation/code_generation_prompt_new.js";
 import { callLLM } from "../commonclients/commonllmengine.js";
 import Execute from "../core/execution.js";
 //import cleanGeneratedCode from "../helpers/cleancode.js";
