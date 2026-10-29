@@ -1,4 +1,4 @@
-import intentDataPrompt from "../generation/intent_data_extraction_prompt.js";
+import intentDataPrompt from "../codegeneration/intent_data_extraction_prompt.js";
 import { callLLM } from "../commonclients/commonllmengine.js";
 import {decrypt} from "../credentials/encryption.js"
 
